@@ -647,6 +647,7 @@ EXPORT_SYMBOL(filemap_write_and_wait);
  * Note that @lend is inclusive (describes the last byte to be written) so
  * that this function can be used to write to the very end-of-file (end = -1).
  */
+ //写操作同步，以确保数据的一致性
 int filemap_write_and_wait_range(struct address_space *mapping,
 				 loff_t lstart, loff_t lend)
 {
@@ -2089,14 +2090,14 @@ find_page:
 		if (!page) {
 			if (iocb->ki_flags & IOCB_NOWAIT)
 				goto would_block;
-			page_cache_sync_readahead(mapping,
-					ra, filp,
-					index, last_index - index);
+			//从磁盘中读取页，并进行预读
+			page_cache_sync_readahead(mapping,ra, filp, index, last_index - index);
 			page = find_get_page(mapping, index);
 			if (unlikely(page == NULL))
 				goto no_cached_page;
 		}
 		if (PageReadahead(page)) {
+			//从磁盘中读取页，并进行预读
 			page_cache_async_readahead(mapping,
 					ra, filp, page,
 					index, last_index - index);
@@ -2218,7 +2219,7 @@ page_not_up_to_date_locked:
 			goto page_ok;
 		}
 
-readpage:
+readpage://读操作获取最新页
 		/*
 		 * A previous I/O error may have been due to temporary
 		 * failures, eg. multipath errors.
@@ -2317,7 +2318,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 	if (!count)//当 count 为 0 时，返回 0
 		goto out; /* skip atime */
 
-	if (iocb->ki_flags & IOCB_DIRECT) {
+	if (iocb->ki_flags & IOCB_DIRECT) {//判断 iocb 打开文件的 flag 来判断是否是 Direct IO
 		struct file *file = iocb->ki_filp;// 获取I/O请求的文件
 		struct address_space *mapping = file->f_mapping;	//获取文件的地址映射空间
 		struct inode *inode = mapping->host;	//获取地址空间的拥有者（iNode或者block_device）
@@ -2328,7 +2329,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 			if (filemap_range_has_page(mapping, iocb->ki_pos,
 						   iocb->ki_pos + count - 1))
 				return -EAGAIN;
-		} else {
+		} else {//判断上次写操作是否需要 filemap_write_and_wait_range 函数同步
 			retval = filemap_write_and_wait_range(mapping,
 						iocb->ki_pos,
 					        iocb->ki_pos + count - 1);
@@ -2336,9 +2337,9 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 				goto out;
 		}
 
-		file_accessed(file);
+		file_accessed(file);//通知系统访问成功
 
-		retval = mapping->a_ops->direct_IO(iocb, iter);
+		retval = mapping->a_ops->direct_IO(iocb, iter);//调用direct_IO() 函数来访问数据
 		if (retval >= 0) {
 			iocb->ki_pos += retval;
 			count -= retval;
